@@ -1,0 +1,107 @@
+[package]
+name = "theremin"
+version = "0.1.0"
+edition = "2024"
+description = "A theremin you play with your bare hands in front of an ordinary webcam"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+log = "0.4"
+# std::time::Instant panics in a browser; this is the same type on the desktop.
+web-time = "1"
+# The ort version must match ort-web's exact pin below.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std"] }
+# ui: winit on the desktop, a <canvas> with WebGL on the web.
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+crossbeam-channel = "0.5"
+dirs = "6"
+# camera
+v4l = "0.14"
+zune-jpeg = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# inference: the native ONNX Runtime, downloaded at build time
+ort = { version = "=2.0.0-rc.15", features = ["download-binaries"] }
+# audio
+cpal = "0.18"
+slint = { version = "1.18", features = ["software-renderer-path", "software-renderer-systemfonts"] }
+
+# The web version: getUserMedia for the camera, onnxruntime-web for inference, Web Audio for sound.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "alternative-backend", "api-24"] }
+ort-web = "=0.5.0"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+console_log = "1"
+web-sys = { version = "0.3", features = [
+    "AudioBuffer",
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioContextState",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioParam",
+    "BaseAudioContext",
+    "BiquadFilterNode",
+    "BiquadFilterType",
+    "CanvasRenderingContext2d",
+    "ConvolverNode",
+    "Document",
+    "DomTokenList",
+    "Element",
+    "EventTarget",
+    "GainNode",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlImageElement",
+    "HtmlMediaElement",
+    "HtmlVideoElement",
+    "ImageData",
+    "Location",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "Navigator",
+    "OscillatorNode",
+    "OscillatorType",
+    "OverSampleType",
+    "AudioScheduledSourceNode",
+    "UrlSearchParams",
+    "WaveShaperNode",
+    "Window",
+] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+[lib]
+name = "theremin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "theremin"
+path = "src/main.rs"
+
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+[profile.release]
+debug = 1
+
+# The web version: small, since every visitor downloads it.
+[profile.web]
+inherits = "release"
+debug = 0
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,31 @@
+// Hand wireframe: a "digital twin" of the tracked hands.
+// Coordinates are normalized (0..1) over the camera frame; the component stretches them to its size.
+
+export struct Landmark { x: float, y: float, r: length, color: color }
+export struct HandPath { commands: string, color: color }
+
+export component HandWireframe inherits Rectangle {
+    in property <[HandPath]> paths;
+    in property <[Landmark]> points;
+    in property <length> line-width: 3px;
+    // Width / height of the frame; path commands are in a (1000 * aspect) x 1000 viewbox.
+    in property <float> aspect: 1.3333;
+
+    for p in root.paths : Path {
+        x: 0; y: 0;
+        width: root.width; height: root.height;
+        viewbox-x: 0; viewbox-y: 0;
+        viewbox-width: 1000 * root.aspect; viewbox-height: 1000;
+        commands: p.commands;
+        stroke: p.color;
+        stroke-width: root.line-width;
+        fill: transparent;
+    }
+    for l in root.points : Rectangle {
+        x: l.x * root.width - l.r;
+        y: l.y * root.height - l.r;
+        width: 2 * l.r; height: 2 * l.r;
+        border-radius: l.r;
+        background: l.color;
+    }
+}

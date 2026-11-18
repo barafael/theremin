@@ -1,0 +1,20 @@
+# The web version: `trunk serve` to play locally (http://127.0.0.1:8080), and
+# `trunk build --release --cargo-profile web` for a static site to host anywhere.
+[build]
+target = "web/index.html"
+dist = "dist"
+# Relative, so it works under a subpath (e.g. GitHub Pages) as well as at the root.
+public_url = "./"
+# Release even for `trunk serve`: a dev build tracks hands about 3x slower in the browser
+# (~100 ms vs ~35 ms a frame), too slow to play.
+release = true
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8080
+
+# Cross-origin isolation lets onnxruntime-web run inference on several threads (SharedArrayBuffer).
+# "credentialless" still allows the runtime's scripts from the jsdelivr CDN.
+[serve.headers]
+"Cross-Origin-Opener-Policy" = "same-origin"
+"Cross-Origin-Embedder-Policy" = "credentialless"

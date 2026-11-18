@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0b10">
+  <title>theremin</title>
+  <meta name="description" content="A theremin you play with your bare hands in front of your webcam. Hand tracking runs in your browser; nothing leaves the page.">
+  <link data-trunk rel="rust" href="../Cargo.toml" data-bin="theremin" data-wasm-opt="s">
+  <link data-trunk rel="copy-file" href="../models/palm_detection_full_inf_post_192x192.onnx" data-target-path="models">
+  <link data-trunk rel="copy-file" href="../models/hand_landmark_sparse_Nx3x224x224.onnx" data-target-path="models">
+  <!-- For ?image=models/test_hand.jpg: play from a still picture instead of the camera. -->
+  <link data-trunk rel="copy-file" href="../models/test_hand.jpg" data-target-path="models">
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #0b0b10;
+      color: #e6e6ee;
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+    }
+    #canvas {
+      position: fixed;
+      inset: 0;
+      /* !important: Slint sets the canvas to its preferred size; the page decides instead. */
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+      outline: none;
+      touch-action: none;
+    }
+    #note {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+    }
+    #note h1 { margin: 0 0 8px; font-size: 1.6rem; font-weight: 600; }
+    #note p { margin: 8px auto; max-width: 34rem; color: #aab1bf; }
+    #note a { color: #5ac8ff; }
+    #failure { font-family: ui-monospace, monospace; font-size: .85rem; white-space: pre-wrap; }
+    body.loading #note, body.failed #note { display: grid; }
+    body.loading #canvas { visibility: hidden; }
+    .if-failed { display: none; }
+    body.failed .if-failed { display: block; }
+    body.failed .while-loading { display: none; }
+  </style>
+  <script>
+    // Once running, the instrument reports its own failures, but it can't if it never arrives.
+    addEventListener("error", (event) => {
+      const ours = event.target === window
+        ? (event.filename || "").startsWith(location.origin)
+        : event.target.tagName === "SCRIPT";
+      if (ours && document.body.classList.contains("loading")) {
+        document.body.classList.add("failed");
+      }
+    }, true);
+  </script>
+</head>
+<body class="loading">
+  <canvas id="canvas" tabindex="0" aria-label="The theremin"></canvas>
+  <main id="note">
+    <div>
+      <h1>theremin</h1>
+      <div class="while-loading"><p>Loading the instrument…</p></div>
+      <div class="if-failed">
+        <p>The theremin could not start. This browser may have WebGL 2 turned off, which it draws
+          with, or the download was interrupted. The browser's console says more.</p>
+        <p id="failure"></p>
+        <p><a href="">Try again</a></p>
+      </div>
+      <p>Right hand left/right for pitch, left hand up/down for volume. Your camera picture stays
+        in this page: hand tracking runs in your browser.</p>
+    </div>
+  </main>
+</body>
+</html>

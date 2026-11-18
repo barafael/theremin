@@ -1,0 +1,288 @@
+import { HandWireframe, Landmark, HandPath } from "wireframe.slint";
+
+// A line of the note grid. x is in normalized frame coordinates.
+// kind: 0 = note outside the scale, 1 = scale note, 2 = root of the key.
+export struct NoteMark { x: float, label: string, kind: int }
+
+export component ThereminWindow inherits Window {
+    title: "theremin";
+    preferred-width: 1180px;
+    preferred-height: 860px;
+    min-width: 480px;
+    min-height: 400px;
+    background: #0b0b10;
+    default-font-family: "Noto Sans";
+
+    // Camera picture and hands.
+    in property <image> frame;
+    in property <float> frame-aspect: 1.3333;
+    in-out property <bool> show-video: true;
+    in property <[HandPath]> paths;
+    in property <[Landmark]> points;
+
+    // Instrument layout (normalized frame coordinates).
+    in property <[NoteMark]> marks;
+    in property <float> zone-left: 0.3;
+    in property <float> zone-right: 0.95;
+    in property <float> vol-top: 0.2;
+    in property <float> vol-bottom: 0.85;
+
+    // Live state.
+    in property <bool> pitch-active;
+    in property <float> pitch-x;        // where the sounding note sits on the grid
+    in property <float> hand-x;         // pitch-hand palm
+    in property <float> hand-y;
+    in property <bool> volume-active;
+    in property <float> volume-hand-y;
+    in property <float> volume;         // volume-hand height in the volume zone, 0..1
+    in property <float> amp;            // what is actually played, 0..1
+    in property <bool> fist;
+    in property <bool> muted;
+
+    in property <string> note: "–";
+    in property <string> cents;
+    in property <string> freq;
+    in property <string> hint;
+    in property <string> settings;
+    in property <string> info: "starting…";
+
+    // Key commands (lowercase letters, "up", "down") handled by the app.
+    callback command(string);
+
+    property <color> pitch-color: #5ac8ff;
+    property <color> volume-color: #ffbe3c;
+    property <color> mute-color: #ff5a5a;
+    property <float> glow: min(1, root.amp * 1.4);
+
+    // Camera frame fitted into the stage with "contain".
+    property <length> fw: stage.width / stage.height > root.frame-aspect ? stage.height * root.frame-aspect : stage.width;
+    property <length> fh: root.fw / root.frame-aspect;
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == "v") {
+                root.show-video = !root.show-video;
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                root.command("up");
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                root.command("down");
+                return accept;
+            }
+            root.command(event.text);
+            accept
+        }
+
+        VerticalLayout {
+            stage := Rectangle {
+                vertical-stretch: 1;
+                background: #000000;
+
+                view := Rectangle {
+                    x: (stage.width - root.fw) / 2;
+                    y: (stage.height - root.fh) / 2;
+                    width: root.fw;
+                    height: root.fh;
+                    clip: true;
+
+                    if root.show-video : Image {
+                        width: view.width;
+                        height: view.height;
+                        source: root.frame;
+                        image-fit: fill;
+                        opacity: 0.4;
+                    }
+
+                    // Pitch zone and note grid.
+                    Rectangle {
+                        x: root.zone-left * view.width;
+                        y: 0;
+                        width: (root.zone-right - root.zone-left) * view.width;
+                        height: view.height;
+                        background: root.pitch-color.with-alpha(0.05);
+                    }
+                    for m in root.marks : Rectangle {
+                        x: m.x * view.width - self.width / 2;
+                        y: 0;
+                        width: m.kind == 2 ? 2px : 1px;
+                        height: view.height;
+                        background: m.kind == 0 ? #ffffff.with-alpha(0.05) : m.kind == 1 ? #ffffff.with-alpha(0.17) : root.pitch-color.with-alpha(0.45);
+                    }
+                    for m in root.marks : Text {
+                        x: m.x * view.width - 20px;
+                        y: view.height - 28px;
+                        width: 40px;
+                        text: m.label;
+                        horizontal-alignment: center;
+                        font-size: m.kind == 2 ? 13px : 11px;
+                        font-weight: m.kind == 2 ? 700 : 400;
+                        color: m.kind == 2 ? root.pitch-color : #d0d0da.with-alpha(0.65);
+                    }
+
+                    // The sounding pitch.
+                    if root.pitch-active : Rectangle {
+                        x: root.pitch-x * view.width - 12px;
+                        y: 0;
+                        width: 24px;
+                        height: view.height;
+                        background: @linear-gradient(90deg, #5ac8ff00 0%, #5ac8ff.with-alpha(0.45 * root.glow) 50%, #5ac8ff00 100%);
+                        Rectangle {
+                            x: 11px;
+                            width: 2px;
+                            height: parent.height;
+                            background: root.pitch-color.with-alpha(0.35 + 0.65 * root.glow);
+                        }
+                    }
+
+                    HandWireframe {
+                        width: view.width;
+                        height: view.height;
+                        aspect: root.frame-aspect;
+                        paths: root.paths;
+                        points: root.points;
+                        line-width: 3px;
+                    }
+
+                    if root.pitch-active : Rectangle {
+                        x: root.hand-x * view.width - 15px;
+                        y: root.hand-y * view.height - 15px;
+                        width: 30px;
+                        height: 30px;
+                        border-radius: 15px;
+                        border-width: 3px;
+                        border-color: root.pitch-color;
+                    }
+
+                    // Volume rail on the left.
+                    Text {
+                        x: 12px;
+                        y: root.vol-top * view.height - 22px;
+                        text: "loud";
+                        font-size: 11px;
+                        color: root.volume-color.with-alpha(0.8);
+                    }
+                    Text {
+                        x: 12px;
+                        y: root.vol-bottom * view.height + 6px;
+                        text: "silent";
+                        font-size: 11px;
+                        color: root.volume-color.with-alpha(0.8);
+                    }
+                    Rectangle {
+                        x: 18px;
+                        y: root.vol-top * view.height;
+                        width: 14px;
+                        height: (root.vol-bottom - root.vol-top) * view.height;
+                        border-radius: 7px;
+                        background: #ffffff.with-alpha(0.06);
+                        border-width: 1px;
+                        border-color: #ffffff.with-alpha(0.15);
+                        Rectangle {
+                            x: 0;
+                            y: parent.height * (1 - root.volume);
+                            width: parent.width;
+                            height: parent.height * root.volume;
+                            border-radius: 7px;
+                            background: (root.fist || root.muted) ? root.mute-color.with-alpha(0.6) : root.volume-color;
+                        }
+                    }
+                    if root.volume-active : Rectangle {
+                        x: 10px;
+                        y: root.volume-hand-y * view.height - 1.5px;
+                        width: 30px;
+                        height: 3px;
+                        background: root.fist ? root.mute-color : root.volume-color;
+                    }
+
+                    // Note readout.
+                    Text {
+                        x: 0;
+                        y: 14px;
+                        width: view.width;
+                        text: root.note;
+                        horizontal-alignment: center;
+                        font-size: 76px;
+                        font-weight: 800;
+                        color: root.pitch-color.with-alpha(0.3 + 0.7 * root.glow);
+                    }
+                    Text {
+                        x: 0;
+                        y: 112px;
+                        width: view.width;
+                        text: root.freq + "    " + root.cents;
+                        horizontal-alignment: center;
+                        font-size: 16px;
+                        color: #d0d0da.with-alpha(0.5 + 0.5 * root.glow);
+                    }
+                    if root.muted || root.fist : Text {
+                        x: 0;
+                        y: 140px;
+                        width: view.width;
+                        text: root.muted ? "muted (M)" : "fist: silent";
+                        horizontal-alignment: center;
+                        font-size: 15px;
+                        font-weight: 700;
+                        color: root.mute-color;
+                    }
+                    if root.hint != "" : Rectangle {
+                        x: (view.width - self.width) / 2;
+                        y: view.height / 2 - 30px;
+                        width: min(view.width - 40px, 560px);
+                        height: 60px;
+                        border-radius: 10px;
+                        background: #101018.with-alpha(0.8);
+                        Text {
+                            width: parent.width - 24px;
+                            text: root.hint;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            font-size: 14px;
+                            color: #e6e6ee;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 58px;
+                background: #13131a;
+                VerticalLayout {
+                    padding: 8px;
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 3px;
+                    HorizontalLayout {
+                        spacing: 16px;
+                        Text {
+                            text: root.settings;
+                            color: #e6e6ee;
+                            font-size: 15px;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: root.info;
+                            color: #8a8a96;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: "S scale · K/J key · Q snap · T timbre · H hands · R reverb · ↑↓ octave · M mute · V video";
+                        color: #8a8a96;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+
+    init => {
+        fs.focus();
+    }
+}

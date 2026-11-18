@@ -1,0 +1,7 @@
+test_hand.jpg
+Source: https://commons.wikimedia.org/wiki/File:Human-Hands-Front-Back.jpg
+Direct: https://upload.wikimedia.org/wikipedia/commons/3/32/Human-Hands-Front-Back.jpg
+Author: Evan-Amos (Wikimedia Commons user), own work
+License: CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/)
+Description: "The front and back of a human's right hand." 1200x800 JPEG, unmodified.
+Downloaded 2026-11-01 for testing the palm detection / hand landmark ONNX models in this directory.

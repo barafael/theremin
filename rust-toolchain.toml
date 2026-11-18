@@ -1,0 +1,4 @@
+[toolchain]
+# Stable: nothing here needs nightly, and nightly 2026-10-31 fails to compile zbus.
+channel = "stable"
+targets = ["wasm32-unknown-unknown"]
