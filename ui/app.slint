@@ -38,6 +38,9 @@ export component ThereminWindow inherits Window {
     in property <float> amp;            // what is actually played, 0..1
     in property <bool> fist;
     in property <bool> muted;
+    in property <bool> tone-enabled;    // the pitch hand's height sets the tone
+    in property <bool> tone-active;     // ... and the pitch hand is in view
+    in property <float> tone: 0.5;      // tone-hand height in the zone, 0..1
 
     in property <string> note: "–";
     in property <string> cents;
@@ -195,6 +198,51 @@ export component ThereminWindow inherits Window {
                         width: 30px;
                         height: 3px;
                         background: root.fist ? root.mute-color : root.volume-color;
+                    }
+
+                    // Tone rail on the right, set by the pitch hand's height.
+                    if root.tone-enabled : Text {
+                        x: view.width - 52px;
+                        width: 40px;
+                        y: root.vol-top * view.height - 22px;
+                        text: "bright";
+                        horizontal-alignment: right;
+                        font-size: 11px;
+                        color: root.pitch-color.with-alpha(0.8);
+                    }
+                    if root.tone-enabled : Text {
+                        x: view.width - 52px;
+                        width: 40px;
+                        y: root.vol-bottom * view.height + 6px;
+                        text: "dark";
+                        horizontal-alignment: right;
+                        font-size: 11px;
+                        color: root.pitch-color.with-alpha(0.8);
+                    }
+                    if root.tone-enabled : Rectangle {
+                        x: view.width - 32px;
+                        y: root.vol-top * view.height;
+                        width: 14px;
+                        height: (root.vol-bottom - root.vol-top) * view.height;
+                        border-radius: 7px;
+                        background: #ffffff.with-alpha(0.06);
+                        border-width: 1px;
+                        border-color: #ffffff.with-alpha(0.15);
+                        Rectangle {
+                            x: 0;
+                            y: parent.height * (1 - root.tone);
+                            width: parent.width;
+                            height: parent.height * root.tone;
+                            border-radius: 7px;
+                            background: root.pitch-color.with-alpha(root.tone-active ? 1.0 : 0.4);
+                        }
+                    }
+                    if root.tone-enabled && root.tone-active : Rectangle {
+                        x: view.width - 40px;
+                        y: root.hand-y * view.height - 1.5px;
+                        width: 30px;
+                        height: 3px;
+                        background: root.pitch-color;
                     }
 
                     // Note readout.

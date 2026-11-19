@@ -61,6 +61,12 @@ pub struct PlayConfig {
     /// 2: one hand plays pitch (left/right), the other volume (up/down), like a real theremin.
     /// 1: a single hand does both.
     pub hands: u8,
+    /// In two-hand mode the pitch hand's height sets the tone, within `volume_zone`: higher =
+    /// brighter, the middle plays the timbre preset as it is.
+    pub tone_hand: bool,
+    /// How much louder playing brightens the tone: 0 = not at all, 1 = as much as the tone
+    /// hand's whole range.
+    pub tone_by_volume: f32,
     /// Which hand plays pitch in two-hand mode. Pitch rises toward this side of the picture.
     pub pitch_hand: Side,
     /// Lowest note (MIDI number, 48 = C3) at the far end of the pitch zone.
@@ -105,6 +111,9 @@ pub struct SoundConfig {
     pub vibrato_rate: f32,
     /// Reverb wet level, 0..1.
     pub reverb: f32,
+    /// Low notes reedier, high notes purer: drive changes by this fraction per octave from A4
+    /// (a heterodyne theremin's low end). 0 = the same tone at every pitch.
+    pub tone_by_pitch: f32,
     /// Requested audio buffer size in frames (lower = less latency). Falls back to the device
     /// default if refused.
     pub buffer_frames: Option<u32>,
@@ -147,6 +156,8 @@ impl Default for PlayConfig {
     fn default() -> Self {
         Self {
             hands: 2,
+            tone_hand: true,
+            tone_by_volume: 0.2,
             pitch_hand: Side::Right,
             low_note: 48,
             octaves: 3.0,
@@ -175,6 +186,7 @@ impl Default for SoundConfig {
             vibrato_depth: 0.0,
             vibrato_rate: 5.5,
             reverb: 0.25,
+            tone_by_pitch: 0.25,
             buffer_frames: Some(256),
         }
     }

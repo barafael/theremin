@@ -118,6 +118,7 @@ async fn play(
         let reading = session.borrow_mut().theremin.update(&hands, Instant::now());
         params.freq.set(midi_to_hz(reading.midi));
         params.amp.set(reading.amp);
+        params.brightness.set(reading.brightness);
         synth.update(&params);
         let audio_info = format!("{:.0} Hz", synth.sample_rate());
         let view = View::new(

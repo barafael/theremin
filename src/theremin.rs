@@ -34,6 +34,12 @@ pub struct Reading {
     pub fist: bool,
     /// Final amplitude target for the synth.
     pub amp: f32,
+    /// Height of the pitch hand within the zone while it sets the tone, 0 (bottom) .. 1 (top).
+    pub tone_level: Option<f32>,
+    /// The tone hand's height, held while the hand is out of view (0.5 when the tone is fixed).
+    pub tone: f32,
+    /// Tone for the synth, 0 (dark) .. 1 (bright), 0.5 = the preset as it is.
+    pub brightness: f32,
 }
 
 pub struct Theremin {
@@ -44,6 +50,8 @@ pub struct Theremin {
     volume_filter: OneEuro,
     fist: bool,
     last_midi: f32,
+    /// The tone hand's last height, kept while the hand is out of view.
+    last_tone: f32,
 }
 
 impl Theremin {
@@ -56,6 +64,7 @@ impl Theremin {
             pitch_filter: OneEuro::new(cfg.min_cutoff, cfg.beta),
             volume_filter: OneEuro::new(cfg.min_cutoff, cfg.beta),
             last_midi: cfg.low_note as f32,
+            last_tone: 0.5,
             cfg,
             root,
             roles: HashMap::new(),
@@ -65,6 +74,18 @@ impl Theremin {
 
     pub fn high_note(&self) -> i32 {
         self.cfg.low_note + (self.cfg.octaves * 12.0).round() as i32
+    }
+
+    /// Height within the vertical zone (volume, and tone in two-hand mode): 0 bottom .. 1 top.
+    fn height_level(&self, y: f32) -> f32 {
+        let [top, bottom] = self.cfg.volume_zone;
+        ((bottom - y) / (bottom - top).max(1e-3)).clamp(0.0, 1.0)
+    }
+
+    /// Whether the pitch hand's height sets the tone (two-hand mode only: with one hand, the
+    /// height is the volume).
+    pub fn tone_hand_active(&self) -> bool {
+        self.cfg.tone_hand && self.cfg.hands >= 2
     }
 
     /// Position along the pitch axis toward the pitch side: 0 = lowest note end, 1 = highest.
@@ -147,8 +168,7 @@ impl Theremin {
                 } else {
                     self.volume_filter.filter(f.palm(), now)
                 };
-                let [top, bottom] = self.cfg.volume_zone;
-                let v = ((bottom - p.y) / (bottom - top).max(1e-3)).clamp(0.0, 1.0);
+                let v = self.height_level(p.y);
                 r.volume_level = v;
                 r.volume = v.powf(self.cfg.volume_curve.max(0.1));
                 r.volume_pos = Some(p);
@@ -171,6 +191,19 @@ impl Theremin {
         } else {
             0.0
         };
+
+        let tone = if self.tone_hand_active() {
+            if let Some(p) = r.pitch_pos {
+                self.last_tone = self.height_level(p.y);
+                r.tone_level = Some(self.last_tone);
+            }
+            self.last_tone
+        } else {
+            0.5
+        };
+        r.tone = tone;
+        // Louder is a little brighter, as with most acoustic instruments.
+        r.brightness = (tone + self.cfg.tone_by_volume * (r.volume - 0.5)).clamp(0.0, 1.0);
         r
     }
 
@@ -280,6 +313,45 @@ mod tests {
         // Without the volume hand there is no sound.
         let r = t.update(&hands[1..], now);
         assert_eq!(r.amp, 0.0);
+    }
+
+    #[test]
+    fn pitch_hand_height_sets_the_tone() {
+        let cfg = PlayConfig {
+            tone_by_volume: 0.0,
+            ..Default::default()
+        };
+        let mut t = Theremin::new(cfg);
+        // A second apart, so the smoothing filter settles between readings.
+        let now = Instant::now();
+        let later = |s: u64| now + web_time::Duration::from_secs(s);
+        let volume = hand(1, 0.15, 0.4, Handedness::Left);
+        let high = t.update(
+            &[volume.clone(), hand(2, 0.8, 0.22, Handedness::Right)],
+            later(1),
+        );
+        let low = t.update(
+            &[volume.clone(), hand(2, 0.8, 0.8, Handedness::Right)],
+            later(2),
+        );
+        assert!(high.brightness > 0.9, "high {}", high.brightness);
+        assert!(low.brightness < 0.2, "low {}", low.brightness);
+        assert!(low.tone_level.is_some());
+        // Out of view, the tone stays where it was.
+        let gone = t.update(&[volume], later(3));
+        assert_eq!(gone.tone_level, None);
+        assert!((gone.brightness - low.brightness).abs() < 1e-6);
+        // With one hand, the height is the volume, not the tone.
+        let mut one = Theremin::new(PlayConfig {
+            hands: 1,
+            tone_by_volume: 0.0,
+            ..Default::default()
+        });
+        assert_eq!(
+            one.update(&[hand(3, 0.6, 0.22, Handedness::Right)], now)
+                .brightness,
+            0.5
+        );
     }
 
     #[test]

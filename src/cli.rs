@@ -32,7 +32,7 @@ enum Cmd {
         #[arg(long)]
         one_hand: bool,
     },
-    /// Sweep through the pitch range for a few seconds to test the sound output.
+    /// Sweep through the pitch range, dark to bright, for a few seconds to test the sound output.
     Tone,
     /// Check models, camera, and audio output.
     Check,
@@ -70,7 +70,7 @@ fn tone(cfg: Config) -> Result<()> {
     let lo = cfg.play.low_note as f32;
     let hi = lo + cfg.play.octaves * 12.0;
     println!(
-        "audio: {} ({} Hz, buffer {:?}); sweeping {} → {} with {} timbre",
+        "audio: {} ({} Hz, buffer {:?}); sweeping {} → {}, dark → bright, with {} timbre",
         audio.device,
         audio.sample_rate,
         audio.buffer,
@@ -86,6 +86,7 @@ fn tone(cfg: Config) -> Result<()> {
             break;
         }
         params.freq.set(midi_to_hz(lo + t * (hi - lo)));
+        params.brightness.set(t);
         params
             .amp
             .set((std::f32::consts::PI * t).sin().sqrt() * 0.8);

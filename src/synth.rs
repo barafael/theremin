@@ -103,18 +103,51 @@ pub struct SynthParams {
     pub freq: AtomicF32,
     /// Amplitude 0..1 before master gain.
     pub amp: AtomicF32,
+    /// Tone, 0 (dark) .. 1 (bright); 0.5 plays the timbre preset as it is.
+    pub brightness: AtomicF32,
     pub reverb: AtomicF32,
     pub muted: AtomicBool,
     timbre: AtomicU32,
+    tone_by_pitch: f32,
 }
 
+/// Brightness at its ends scales drive and cutoff by 2^±this (octaves).
+const BRIGHTNESS_RANGE: f32 = 1.5;
+/// The most drive any shape gets (the web voice's waveshaper curve spans this).
+pub const MAX_DRIVE: f32 = 24.0;
+
 impl Shape {
-    /// The clipper's transfer function, normalized so a full-scale sine peaks near ±1 with no DC
-    /// at rest: `(tanh(d·(x + a)) − tanh(d·a)) / (tanh(d·(1 + a)) − tanh(d·a))`.
+    /// `2 / (tanh(d·(1 + a)) − tanh(d·(a − 1)))`: scales a full-scale sine through the clipper
+    /// to a peak-to-peak swing of 2. Asymmetric shapes saturate one half and swing far on the
+    /// other, so it has to be the whole swing, not one peak.
+    pub fn norm(&self) -> f32 {
+        let swing =
+            (self.drive * (1.0 + self.asym)).tanh() - (self.drive * (self.asym - 1.0)).tanh();
+        2.0 / swing.max(1e-3)
+    }
+
+    /// The clipper's transfer function, normalized to a peak-to-peak swing of 2 for a full-scale
+    /// sine, with no output at rest: `(tanh(d·(x + a)) − tanh(d·a)) · norm`.
     pub fn transfer(&self, x: f32) -> f32 {
         let off = (self.drive * self.asym).tanh();
-        let norm = ((self.drive * (1.0 + self.asym)).tanh() - off).max(1e-3);
-        ((self.drive * (x + self.asym)).tanh() - off) / norm
+        ((self.drive * (x + self.asym)).tanh() - off) * self.norm()
+    }
+
+    /// This shape played brighter or darker, at a pitch.
+    ///
+    /// `brightness` 0..1 (0.5 = unchanged) scales drive and cutoff together over ±1.5 octaves.
+    /// `tone_by_pitch` adds drive below A4 and takes it away above, by that fraction per octave:
+    /// a heterodyne theremin's oscillators pull on each other on low notes, which makes them
+    /// reedier.
+    pub fn modulated(&self, brightness: f32, freq: f32, tone_by_pitch: f32) -> Shape {
+        let b = (brightness.clamp(0.0, 1.0) - 0.5) * 2.0 * BRIGHTNESS_RANGE;
+        let octaves_from_a4 = (freq.max(1.0) / 440.0).log2().clamp(-2.0, 2.0);
+        let pitch = (1.0 - tone_by_pitch * octaves_from_a4).max(0.1);
+        Shape {
+            drive: (self.drive * b.exp2() * pitch).min(MAX_DRIVE / (1.0 + self.asym)),
+            asym: self.asym,
+            cutoff: (self.cutoff * b.exp2()).clamp(200.0, 16000.0),
+        }
     }
 }
 
@@ -123,10 +156,19 @@ impl SynthParams {
         Self {
             freq: AtomicF32::new(220.0),
             amp: AtomicF32::new(0.0),
+            brightness: AtomicF32::new(0.5),
             reverb: AtomicF32::new(cfg.reverb),
             muted: AtomicBool::new(false),
             timbre: AtomicU32::new(cfg.timbre as u32),
+            tone_by_pitch: cfg.tone_by_pitch.max(0.0),
         }
+    }
+
+    /// The shape to play now: the timbre preset at the current brightness and pitch.
+    pub fn shape(&self) -> Shape {
+        self.timbre()
+            .shape()
+            .modulated(self.brightness.get(), self.freq.get(), self.tone_by_pitch)
     }
     pub fn timbre(&self) -> Timbre {
         Timbre::from_index(self.timbre.load(Relaxed))
@@ -220,8 +262,8 @@ mod desktop {
             } else {
                 p.amp.get().clamp(0.0, 1.0)
             };
-            // Timbre and reverb move once per buffer (a few ms), which is smooth enough.
-            let s = p.timbre().shape();
+            // Timbre, tone and reverb move once per buffer (a few ms), which is smooth enough.
+            let s = p.shape();
             let k = 0.15;
             self.drive += (s.drive - self.drive) * k;
             self.asym += (s.asym - self.asym) * k;
@@ -232,6 +274,7 @@ mod desktop {
                 asym: self.asym,
                 cutoff: self.cutoff,
             };
+            let (norm, off) = (shape.norm(), (shape.drive * shape.asym).tanh());
             let a_lp = 1.0 - (-TAU * self.cutoff / self.sr).exp();
             let dry = 1.0 - 0.5 * self.wet;
             // Starting from silence, jump straight to the new pitch instead of sweeping up to it.
@@ -257,7 +300,7 @@ mod desktop {
                 let f = (self.log_freq + vib).exp2();
                 self.phase = (self.phase + f / self.sr).fract();
                 let s = (TAU * self.phase).sin();
-                let shaped = shape.transfer(s);
+                let shaped = ((shape.drive * (s + shape.asym)).tanh() - off) * norm;
                 // DC blocker: the asymmetric clipper leaves an offset that depends on the drive.
                 let y = shaped - self.dc_x + 0.995 * self.dc_y;
                 self.dc_x = shaped;
@@ -497,6 +540,45 @@ mod tests {
             assert!(peak > 0.1 && peak <= 1.0, "{t:?} peak {peak}");
             assert!(out.iter().all(|s| s.is_finite()));
         }
+    }
+
+    #[test]
+    fn tone_follows_brightness_and_pitch() {
+        let base = Timbre::Classic.shape();
+        let same = base.modulated(0.5, 440.0, 0.25);
+        assert!((same.drive - base.drive).abs() < 1e-4 && (same.cutoff - base.cutoff).abs() < 1e-2);
+        let bright = base.modulated(1.0, 440.0, 0.25);
+        let dark = base.modulated(0.0, 440.0, 0.25);
+        assert!(bright.drive > 2.5 * base.drive && bright.cutoff > 2.5 * base.cutoff);
+        assert!(dark.drive < 0.4 * base.drive && dark.cutoff < 0.4 * base.cutoff);
+        // Low notes reedier, high notes purer, a little.
+        let low = base.modulated(0.5, 110.0, 0.25);
+        let high = base.modulated(0.5, 1760.0, 0.25);
+        assert!(low.drive > base.drive * 1.4 && high.drive < base.drive * 0.6);
+        assert_eq!(base.modulated(0.5, 110.0, 0.0).drive, base.drive);
+        // Every shape, however bright and at any pitch, swings 2 peak to peak: the clipper never
+        // gets louder than the plain sine.
+        for t in Timbre::ALL {
+            for b in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                for f in [55.0, 130.0, 440.0, 1760.0] {
+                    let s = t.shape().modulated(b, f, 0.25);
+                    let ys: Vec<f32> = (0..=1000)
+                        .map(|i| s.transfer(i as f32 / 500.0 - 1.0))
+                        .collect();
+                    let (lo, hi) = ys
+                        .iter()
+                        .fold((f32::MAX, f32::MIN), |(lo, hi), &y| (lo.min(y), hi.max(y)));
+                    assert!(
+                        (hi - lo - 2.0).abs() < 1e-3,
+                        "{t:?} b {b} f {f}: swing {}",
+                        hi - lo
+                    );
+                }
+            }
+        }
+        // Never past what the web voice's waveshaper spans.
+        let max = Timbre::Reed.shape().modulated(1.0, 30.0, 1.0);
+        assert!(max.drive * (1.0 + max.asym) <= MAX_DRIVE + 1e-3);
     }
 
     #[test]

@@ -15,11 +15,14 @@ cargo build --release
 ./target/release/theremin play --one-hand
 ```
 
-Like the real instrument, one hand plays pitch and the other plays volume:
+Like the real instrument, one hand plays pitch and the other plays volume. Unlike it, the pitch
+hand's height also shapes the tone (a real theremin's tone is set by its knobs; its timbre only
+drifts a little with pitch and volume, which this one imitates too):
 
 | hand | movement | effect |
 |---|---|---|
 | right (pitch) | left ↔ right | pitch, continuously, rising to the right, across `play.octaves` (C3–C6 by default) |
+| right (pitch) | down ↕ up | tone: low = dark, high = bright, the middle plays the timbre preset as it is |
 | left (volume) | down ↕ up | volume: low = silent, high = loud |
 | left (volume) | close into a fist | instant silence (for staccato and phrasing), open to play again |
 
@@ -102,6 +105,10 @@ tracks single-threaded: about 80 ms per frame instead of 40.
   steadier notes at rest; higher `beta` gives less lag on fast moves. A heavier filter also eats
   hand vibrato, so `sound.vibrato_depth` (semitones) can add synthetic vibrato.
 - `play.fist_enter` / `fist_exit`: finger straightness thresholds for the fist mute.
+- Tone: `play.tone_hand` (the pitch hand's height sets it; on by default), `play.tone_by_volume`
+  (louder is a little brighter, 0.2) and `sound.tone_by_pitch` (low notes a little reedier and
+  high notes purer, 0.25 per octave from A4, like a heterodyne theremin's low end). Brightness
+  scales the clipper's drive and the low-pass cutoff together over ±1.5 octaves.
 - `sound.glide_ms`, `attack_ms`, `release_ms`: how the synth smooths between camera frames.
 - `sound.buffer_frames`: audio buffer (256 frames ≈ 5 ms at 48 kHz); the device default is used
   if the request is refused.

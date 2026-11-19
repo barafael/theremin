@@ -123,8 +123,10 @@ impl Grabber {
             .map_err(js_err)?
             .data();
         let rgb: Vec<u8> = rgba
-            .chunks_exact(4)
-            .flat_map(|p| [p[0], p[1], p[2]])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b, _]| [r, g, b])
             .collect();
         self.sequence += 1;
         Ok(Some(Frame {

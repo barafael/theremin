@@ -2,17 +2,21 @@
 //! playing smoothly while the page's main thread is busy with hand tracking:
 //!
 //! ```text
-//! sine osc ──▶ waveshaper ──▶ DC block ──▶ low-pass ──▶ envelope ──▶ master ─┬─▶ dry ──▶ out
-//!   ▲ detune                 (Shape::transfer)                              └─▶ reverb ─▶ wet ──▶ out
+//! sine osc ──▶ drive ──▶ tanh ──▶ norm ──▶ DC block ──▶ low-pass ──▶ envelope ──▶ master ─┬─▶ dry ──▶ out
+//!   ▲ detune  offset ──┘  rest ──┘                                                      └─▶ reverb ─▶ wet ──▶ out
 //!   └─ vibrato LFO
 //! ```
 //!
-//! Pitch glide and the envelope are `setTargetAtTime`, the same one-pole smoothing the desktop
-//! voice does per sample.
+//! That is the desktop voice's clipper, `(tanh(d·(x + a)) − tanh(d·a)) · norm`, with the drive
+//! `d`, the offset `d·a`, the resting level `−tanh(d·a)` and `norm` as gains and constants
+//! around one fixed `tanh` curve, so tone changes glide instead of swapping curves. Taking the
+//! resting level off before `norm` keeps the large offset of the asymmetric shapes from thumping
+//! through the DC block when the tone moves. Pitch glide, the envelope and tone changes are all
+//! `setTargetAtTime`, the same one-pole smoothing the desktop voice does per sample.
 
 use super::js_err;
 use crate::config::SoundConfig;
-use crate::synth::{SynthParams, Timbre};
+use crate::synth::{MAX_DRIVE, Shape, SynthParams};
 use anyhow::Result;
 use std::cell::Cell;
 use std::sync::atomic::Ordering;
@@ -20,13 +24,19 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
 use web_sys::{
     AudioContext, AudioContextOptions, AudioContextState, BiquadFilterNode, BiquadFilterType,
-    GainNode, OscillatorNode, OscillatorType, OverSampleType, WaveShaperNode,
+    ConstantSourceNode, GainNode, OscillatorNode, OscillatorType, OverSampleType,
 };
+
+/// Time constant for tone changes, in seconds.
+const TONE_TAU: f64 = 0.03;
 
 pub struct WebSynth {
     ctx: AudioContext,
     osc: OscillatorNode,
-    shaper: WaveShaperNode,
+    drive: GainNode,
+    offset: ConstantSourceNode,
+    rest: ConstantSourceNode,
+    norm: GainNode,
     lowpass: BiquadFilterNode,
     envelope: GainNode,
     dry: GainNode,
@@ -35,7 +45,6 @@ pub struct WebSynth {
     attack: f64,
     release: f64,
     amp_target: Cell<f32>,
-    timbre: Cell<Option<Timbre>>,
     reverb: Cell<f32>,
 }
 
@@ -59,8 +68,19 @@ impl WebSynth {
             .connect_with_audio_param(&osc.detune())
             .map_err(js_err)?;
 
+        // The waveshaper's input runs -1..1, so its curve is tanh(MAX_DRIVE · x) and the drive
+        // and offset come in divided by MAX_DRIVE.
+        let drive = ctx.create_gain().map_err(js_err)?;
+        let offset = ctx.create_constant_source().map_err(js_err)?;
         let shaper = ctx.create_wave_shaper().map_err(js_err)?;
         shaper.set_oversample(OverSampleType::N4x);
+        const N: usize = 8193;
+        let curve: Vec<f32> = (0..N)
+            .map(|i| (MAX_DRIVE * (i as f32 / (N - 1) as f32 * 2.0 - 1.0)).tanh())
+            .collect();
+        shaper.set_curve_opt_f32_array(Some(&js_sys::Float32Array::from(&curve[..])));
+        let rest = ctx.create_constant_source().map_err(js_err)?;
+        let norm = ctx.create_gain().map_err(js_err)?;
         // The asymmetric clipper leaves a DC offset; block it like the desktop voice does.
         let dc_block = ctx.create_biquad_filter().map_err(js_err)?;
         dc_block.set_type(BiquadFilterType::Highpass);
@@ -79,8 +99,12 @@ impl WebSynth {
         let dry = ctx.create_gain().map_err(js_err)?;
         let wet = ctx.create_gain().map_err(js_err)?;
 
-        osc.connect_with_audio_node(&shaper).map_err(js_err)?;
-        shaper.connect_with_audio_node(&dc_block).map_err(js_err)?;
+        osc.connect_with_audio_node(&drive).map_err(js_err)?;
+        drive.connect_with_audio_node(&shaper).map_err(js_err)?;
+        offset.connect_with_audio_node(&shaper).map_err(js_err)?;
+        shaper.connect_with_audio_node(&norm).map_err(js_err)?;
+        rest.connect_with_audio_node(&norm).map_err(js_err)?;
+        norm.connect_with_audio_node(&dc_block).map_err(js_err)?;
         dc_block.connect_with_audio_node(&lowpass).map_err(js_err)?;
         lowpass.connect_with_audio_node(&envelope).map_err(js_err)?;
         envelope.connect_with_audio_node(&master).map_err(js_err)?;
@@ -93,11 +117,16 @@ impl WebSynth {
             .map_err(js_err)?;
         osc.start().map_err(js_err)?;
         lfo.start().map_err(js_err)?;
+        offset.start().map_err(js_err)?;
+        rest.start().map_err(js_err)?;
 
         let synth = Self {
             ctx,
             osc,
-            shaper,
+            drive,
+            offset,
+            rest,
+            norm,
             lowpass,
             envelope,
             dry,
@@ -106,10 +135,9 @@ impl WebSynth {
             attack: cfg.attack_ms as f64 / 1000.0,
             release: cfg.release_ms as f64 / 1000.0,
             amp_target: Cell::new(0.0),
-            timbre: Cell::new(None),
             reverb: Cell::new(-1.0),
         };
-        synth.set_timbre(cfg.timbre);
+        synth.set_shape(&cfg.timbre.shape(), true);
         synth.set_reverb(cfg.reverb);
         Ok(synth)
     }
@@ -171,27 +199,27 @@ impl WebSynth {
         };
         let _ = self.envelope.gain().set_target_at_time(target, now, tau);
         self.amp_target.set(target);
-        self.set_timbre(p.timbre());
+        self.set_shape(&p.shape(), false);
         self.set_reverb(p.reverb.get());
     }
 
-    fn set_timbre(&self, t: Timbre) {
-        if self.timbre.get() == Some(t) {
-            return;
+    /// Glide to a clipper shape (or jump there, at start).
+    fn set_shape(&self, shape: &Shape, jump: bool) {
+        let now = self.ctx.current_time();
+        let targets = [
+            (self.drive.gain(), shape.drive / MAX_DRIVE),
+            (self.offset.offset(), shape.drive * shape.asym / MAX_DRIVE),
+            (self.rest.offset(), -(shape.drive * shape.asym).tanh()),
+            (self.norm.gain(), shape.norm()),
+            (self.lowpass.frequency(), shape.cutoff),
+        ];
+        for (param, value) in targets {
+            let _ = if jump {
+                param.set_value_at_time(value, now)
+            } else {
+                param.set_target_at_time(value, now, TONE_TAU)
+            };
         }
-        self.timbre.set(Some(t));
-        let shape = t.shape();
-        const N: usize = 2049;
-        let curve: Vec<f32> = (0..N)
-            .map(|i| shape.transfer(i as f32 / (N - 1) as f32 * 2.0 - 1.0))
-            .collect();
-        self.shaper
-            .set_curve_opt_f32_array(Some(&js_sys::Float32Array::from(&curve[..])));
-        let _ = self.lowpass.frequency().set_target_at_time(
-            shape.cutoff,
-            self.ctx.current_time(),
-            0.03,
-        );
     }
 
     fn set_reverb(&self, wet: f32) {
@@ -215,7 +243,7 @@ fn room_impulse(ctx: &AudioContext) -> Result<web_sys::AudioBuffer, wasm_bindgen
     let buffer = ctx.create_buffer(2, len as u32, sr)?;
     let mut seed = 0x9E37_79B9u32;
     for ch in 0..2 {
-        let mut data: Vec<f32> = (0..len)
+        let data: Vec<f32> = (0..len)
             .map(|i| {
                 // xorshift noise
                 seed ^= seed << 13;
@@ -226,7 +254,7 @@ fn room_impulse(ctx: &AudioContext) -> Result<web_sys::AudioBuffer, wasm_bindgen
                 noise * (-t * 3.2).exp()
             })
             .collect();
-        buffer.copy_to_channel(&mut data, ch)?;
+        buffer.copy_to_channel(&data, ch)?;
     }
     Ok(buffer)
 }

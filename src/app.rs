@@ -92,6 +92,7 @@ mod desktop {
             let reading = session.theremin.update(&hands, Instant::now());
             params.freq.set(midi_to_hz(reading.midi));
             params.amp.set(reading.amp);
+            params.brightness.set(reading.brightness);
 
             let view = View::new(
                 &mut session,
@@ -227,6 +228,7 @@ pub struct View {
     reading: Reading,
     pitch_x: f32,
     muted: bool,
+    tone_enabled: bool,
     note: String,
     cents: String,
     freq: String,
@@ -266,7 +268,7 @@ impl View {
         let two = s.theremin.cfg.hands >= 2;
         let hint = match (r.pitch_hand.is_some(), r.volume_hand.is_some()) {
             (false, false) if two => {
-                "Raise both hands. Right hand: move left/right for pitch. Left hand: raise for volume."
+                "Raise both hands. Right hand: left/right for pitch, up/down for tone. Left hand: raise for volume."
             }
             (false, false) => "Raise one hand: left/right for pitch, up/down for volume.",
             (true, false) => "Now raise your other hand to set the volume.",
@@ -283,6 +285,7 @@ impl View {
             zone: s.theremin.pitch_zone_x(),
             volume_zone: s.theremin.cfg.volume_zone,
             pitch_x: s.theremin.midi_to_x(r.midi),
+            tone_enabled: s.theremin.tone_hand_active(),
             muted: s.params.muted.load(Ordering::Relaxed),
             note: music::note_name(nearest),
             cents: format!("{cents:+} ¢"),
@@ -321,6 +324,9 @@ impl View {
         ui.set_volume(r.volume_level);
         ui.set_amp(if self.muted { 0.0 } else { r.amp });
         ui.set_fist(r.fist);
+        ui.set_tone_enabled(self.tone_enabled);
+        ui.set_tone_active(r.tone_level.is_some());
+        ui.set_tone(r.tone);
         ui.set_muted(self.muted);
         ui.set_note(self.note.into());
         ui.set_cents(self.cents.into());
